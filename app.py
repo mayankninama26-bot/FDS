@@ -6,20 +6,14 @@ import os
 import random
 import re
 import numpy as np
-import easyocr
+import pytesseract
+from PIL import Image
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 app.secret_key = "fraud_ai_secret"
 
-# ===============================
-# EASY OCR (WORKS ON RENDER)
-# ===============================
-reader = easyocr.Reader(['en'], gpu=False)
-
-# ===============================
-# DATABASE
-# ===============================
+# ================= DATABASE =================
 DB_PATH = os.environ.get("DB_PATH", "users.db")
 
 def get_db():
@@ -43,10 +37,7 @@ def init_db():
 
 init_db()
 
-
-# ===============================
-# LOAD MODELS
-# ===============================
+# ================= LOAD MODELS =================
 model_files = [
     "creditcard_model.pkl",
     "test_model.pkl",
@@ -70,14 +61,10 @@ except:
     scam_model = None
     vectorizer = None
 
-# ===============================
-# FOLDER
-# ===============================
+# ================= FOLDER =================
 os.makedirs("uploads", exist_ok=True)
 
-# ===============================
-# MODEL DETECTION
-# ===============================
+# ================= MODEL MATCH =================
 def detect_best_model(df):
     best_model = None
     best_features = None
@@ -91,6 +78,7 @@ def detect_best_model(df):
             best_features = features
 
     return best_model, best_features
+
 
 # ===============================
 # LOGIN
@@ -250,7 +238,7 @@ def dashboard():
             image_file = request.files.get("image")
             message = request.form.get("message")
 
-            # ================= CSV =================
+            # ===== CSV =====
             if csv_file and csv_file.filename:
                 path = os.path.join("uploads", csv_file.filename)
                 csv_file.save(path)
@@ -266,42 +254,36 @@ def dashboard():
 
                 for chunk in pd.read_csv(path, chunksize=10000):
                     chunk = chunk.reindex(columns=features, fill_value=0)
-                    data = chunk.values
-
-                    probs = model.predict_proba(data)[:, 1]
+                    probs = model.predict_proba(chunk.values)[:, 1]
 
                     risk = np.where(probs > 0.59, "HIGH",
                             np.where(probs > 0.5, "MEDIUM", "LOW"))
-
-                    chunk["Fraud_Score"] = probs
-                    chunk["Risk_Level"] = risk
 
                     safe += np.sum(risk == "LOW")
                     medium += np.sum(risk == "MEDIUM")
                     high += np.sum(risk == "HIGH")
 
+                    chunk["Fraud_Score"] = probs
+                    chunk["Risk_Level"] = risk
+
                     results_list.append(chunk.head(2))
 
-                df_input = pd.concat(results_list, ignore_index=True)
-                results = df_input.to_dict(orient="records")
+                results = pd.concat(results_list).to_dict(orient="records")
 
-            # ================= IMAGE =================
+            # ===== IMAGE OCR =====
             elif image_file and image_file.filename:
                 path = os.path.join("uploads", image_file.filename)
                 image_file.save(path)
 
                 try:
-                    result = reader.readtext(path, detail=0)
-                    text = " ".join(result)
-
+                    text = pytesseract.image_to_string(Image.open(path))
                     if not text.strip():
                         text = "No text detected"
-
                 except Exception as e:
                     text = f"OCR Error: {e}"
 
                 prob = 0
-                if scam_model and vectorizer and text:
+                if scam_model and vectorizer:
                     prob = scam_model.predict_proba(vectorizer.transform([text]))[0][1]
 
                 risk = "HIGH" if prob > 0.59 else "MEDIUM" if prob > 0.5 else "LOW"
@@ -320,7 +302,7 @@ def dashboard():
                     "Score": round(prob * 100, 2)
                 }]
 
-            # ================= MESSAGE =================
+            # ===== MESSAGE =====
             elif message:
                 prob = 0
                 if scam_model and vectorizer:
