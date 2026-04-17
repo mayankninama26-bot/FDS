@@ -3,7 +3,6 @@ pandas
 numpy
 scikit-learn
 gunicorn
-easyocr
-torch
+pytesseract
 Pillow
 joblib
